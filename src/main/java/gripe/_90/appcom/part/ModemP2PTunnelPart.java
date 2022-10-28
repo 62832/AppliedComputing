@@ -1,6 +1,8 @@
 package gripe._90.appcom.part;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -8,11 +10,15 @@ import org.jetbrains.annotations.Nullable;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 
+import dan200.computercraft.api.network.IPacketNetwork;
 import dan200.computercraft.api.network.IPacketReceiver;
 import dan200.computercraft.api.network.IPacketSender;
 import dan200.computercraft.api.network.Packet;
+import dan200.computercraft.api.peripheral.IComputerAccess;
 import dan200.computercraft.api.peripheral.IPeripheral;
 import dan200.computercraft.shared.Capabilities;
+import dan200.computercraft.shared.peripheral.modem.ModemState;
+import dan200.computercraft.shared.peripheral.modem.wireless.WirelessNetwork;
 
 import appeng.api.parts.IPartItem;
 import appeng.api.parts.IPartModel;
@@ -27,11 +33,16 @@ public class ModemP2PTunnelPart extends CapabilityP2PTunnelPart<ModemP2PTunnelPa
     private static final P2PModels MODELS = new P2PModels(AppliedComputing.makeId("part/modem_p2p_tunnel"));
     private static final NullPacketHandler NULL_MODEM = new NullPacketHandler();
 
+    // TODO
+    private final IPacketNetwork network = new WirelessNetwork();
+    private final Set<IComputerAccess> computers = new HashSet<>(1);
+    private final ModemState state = new ModemState();
+
     public ModemP2PTunnelPart(IPartItem<?> partItem) {
         super(partItem, Capabilities.CAPABILITY_PERIPHERAL);
-        inputHandler = new InputPacketHandler();
-        outputHandler = new OutputPacketHandler();
-        emptyHandler = NULL_MODEM;
+        this.inputHandler = new InputPacketHandler();
+        this.outputHandler = new OutputPacketHandler();
+        this.emptyHandler = NULL_MODEM;
     }
 
     @PartModels
@@ -61,7 +72,14 @@ public class ModemP2PTunnelPart extends CapabilityP2PTunnelPart<ModemP2PTunnelPa
         @NotNull
         @Override
         public String getSenderID() {
-            return null; // TODO
+            synchronized (computers) {
+                if (computers.size() != 1) {
+                    return "unknown";
+                } else {
+                    var computer = computers.iterator().next();
+                    return computer.getID() + "_" + computer.getAttachmentName();
+                }
+            }
         }
 
         @NotNull
@@ -72,7 +90,12 @@ public class ModemP2PTunnelPart extends CapabilityP2PTunnelPart<ModemP2PTunnelPa
 
         @Override
         public boolean equals(@Nullable IPeripheral other) {
-            return false; // TODO
+            for (var tunnel : ModemP2PTunnelPart.this.getOutputs()) {
+                try (CapabilityGuard guard = tunnel.getAdjacentCapability()) {
+                    return guard.get().equals(other);
+                }
+            }
+            return this == other;
         }
     }
 
@@ -102,12 +125,30 @@ public class ModemP2PTunnelPart extends CapabilityP2PTunnelPart<ModemP2PTunnelPa
 
         @Override
         public void receiveSameDimension(@NotNull Packet packet, double distance) {
-            // TODO
+            if (!state.isOpen(packet.channel())) {
+                return;
+            }
+
+            synchronized (computers) {
+                for (var computer : computers) {
+                    computer.queueEvent("modem_message", computer.getAttachmentName(), packet.channel(),
+                            packet.replyChannel(), packet.payload(), distance);
+                }
+            }
         }
 
         @Override
         public void receiveDifferentDimension(@NotNull Packet packet) {
-            // TODO
+            if (!state.isOpen(packet.channel())) {
+                return;
+            }
+
+            synchronized (computers) {
+                for (var computer : computers) {
+                    computer.queueEvent("modem_message", computer.getAttachmentName(), packet.channel(),
+                            packet.replyChannel(), packet.payload());
+                }
+            }
         }
 
         @NotNull
@@ -118,7 +159,9 @@ public class ModemP2PTunnelPart extends CapabilityP2PTunnelPart<ModemP2PTunnelPa
 
         @Override
         public boolean equals(@Nullable IPeripheral other) {
-            return false; // TODO
+            try (CapabilityGuard input = ModemP2PTunnelPart.this.getInputCapability()) {
+                return input.get().equals(other) || this == other;
+            }
         }
     }
 
